@@ -11,14 +11,15 @@ load_dotenv()
 class MegaverseAPI:
     """A class to interact with the Crossmint Megaverse API."""
 
+    BASE_URL = "https://challenge.crossmint.io/api"
+
     def __init__(self, candidate_id):
-        self.base_url = "https://challenge.crossmint.io/api"
         self.candidate_id = candidate_id
         self.created_polyanets = set()  # Cache to store created POLYanets
 
     def make_request(self, endpoint, method="post", **kwargs):
         """Generic method for making API requests with rate limit handling."""
-        url = f"{self.base_url}/{endpoint}"
+        url = f"{self.BASE_URL}/{endpoint}"
         payload = {"candidateId": self.candidate_id, **kwargs}
 
         # Check cache to avoid duplicate requests
