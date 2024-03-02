@@ -2,92 +2,73 @@ import itertools
 import time
 import requests
 
-# Constants
-BASE_URL = "https://challenge.crossmint.io/api"
-CANDIDATE_ID = "be5531ab-f261-4f70-b3c7-b9478e44cbc3"
-RATE_LIMIT_DELAY = 1.0
 
+class MegaverseAPI:
+    """A class to interact with the Crossmint Megaverse API."""
 
-# Exponential backoff function
-def exponential_backoff(attempt):
-    wait_time = min(2**attempt, 60)
-    time.sleep(wait_time)
+    def __init__(self, candidate_id):
+        self.base_url = "https://challenge.crossmint.io/api"
+        self.candidate_id = candidate_id
+        self.created_polyanets = set()  # Cache to store created POLYanets
 
+    def make_request(self, endpoint, method="post", **kwargs):
+        """Generic method for making API requests with rate limit handling."""
+        url = f"{self.base_url}/{endpoint}"
+        payload = {"candidateId": self.candidate_id, **kwargs}
 
-# API Call Functions
-def create_polyanet(row, column):
-    url = f"{BASE_URL}/polyanets"
-    payload = {"candidateId": CANDIDATE_ID, "row": row, "column": column}
-    return requests.post(url, json=payload, timeout=5)
+        # Check cache to avoid duplicate requests
+        if (
+            endpoint == "polyanets"
+            and (kwargs["row"], kwargs["column"]) in self.created_polyanets
+        ):
+            print(
+                f"POLYanet at ({kwargs['row']}, {kwargs['column']}) already created. Skipping..."
+            )
+            return None
 
+        for attempt in range(5):
+            response = requests.request(method, url, json=payload, timeout=5)
+            if response.status_code == 200:
+                if endpoint == "polyanets":
+                    self.created_polyanets.add(
+                        (kwargs["row"], kwargs["column"])
+                    )  # Cache successful creation
+                return response.json()
+            elif response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 2**attempt))
+                time.sleep(retry_after)
+            else:
+                print(f"Request failed: {response.text}")
+                return None
 
-def delete_polyanet(row, column):
-    url = f"{BASE_URL}/polyanets"
-    payload = {"candidateId": CANDIDATE_ID, "row": row, "column": column}
-    return requests.delete(url, json=payload, timeout=5)
+    def clear_map(self, grid_size):
+        """Clears the entire map before creating new objects."""
+        for row, column in itertools.product(range(grid_size), repeat=2):
+            self.make_request("polyanets", method="delete", row=row, column=column)
 
-
-# Create a goal state function
-def fetch_goal_state():
-    url = f"{BASE_URL}/map/{CANDIDATE_ID}/goal"
-    response = requests.get(url, timeout=5)
-    if response.status_code == 200:
-        goal_data = response.json()
-        return goal_data["goal"]  # Assuming 'goal' is the key in the response
-    else:
-        print(
-            f"Failed to fetch goal state - Status Code: {response.status_code}, Response: {response.text}"
-        )
+    def fetch_goal_state(self):
+        """Fetches the goal state for the megaverse creation."""
+        if response := self.make_request("map/{candidateId}/goal", method="get"):
+            return response.get("goal")
         return None
 
 
-def clear_map(grid_size):
-    for row, column in itertools.product(range(grid_size), repeat=2):
-        response = delete_polyanet(row, column)  # Assuming the API is 0-indexed
-        if response.status_code not in [
-            200,
-            404,
-            400,
-        ]:  # Including 400 for out-of-bounds
-            print(
-                f"Failed to clear POLYanet at ({row}, {column}) - Status Code: {response.status_code}, Response: {response.text}"
-            )
-        time.sleep(RATE_LIMIT_DELAY)
-
-
 def main():
-    goal_state = fetch_goal_state()
-    if goal_state is None:
+    candidate_id = "be5531ab-f261-4f70-b3c7-b9478e44cbc3"
+    api = MegaverseAPI(candidate_id)
+
+    goal_state = api.fetch_goal_state()
+    if not goal_state:
         print("Failed to fetch the goal state.")
         return
 
     grid_size = max(len(goal_state), len(goal_state[0]))
+    api.clear_map(grid_size)  # Clear the map based on the inferred grid size
 
-    # Clear existing POLYanets
-    clear_map(grid_size + 1)
-
-    attempt = 0
     for row_idx, row in enumerate(goal_state):
         for col_idx, cell in enumerate(row):
-            if cell == "POLYANET":
-                while True:
-                    response = create_polyanet(row_idx, col_idx)
-                    if response.status_code == 200:
-                        print(f"POLYanet created at ({row_idx}, {col_idx})")
-                        attempt = 0  # Reset attempt count after a successful request
-                        time.sleep(
-                            RATE_LIMIT_DELAY
-                        )  # Delay to comply with rate limiting
-                        break
-                    elif response.status_code == 429:
-                        print("Rate limit hit, waiting to retry...")
-                        attempt += 1
-                        exponential_backoff(attempt)
-                    else:
-                        print(
-                            f"Failed to create POLYanet at ({row_idx}, {col_idx}) - Status Code: {response.status_code}, Response: {response.text}"
-                        )
-                        break
+            if cell == "POLYANet":
+                api.make_request("polyanets", row=row_idx, column=col_idx)
 
 
 if __name__ == "__main__":

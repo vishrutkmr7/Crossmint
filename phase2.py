@@ -2,88 +2,56 @@ import itertools
 import time
 import requests
 
-# Constants
-BASE_URL = "https://challenge.crossmint.io/api"
-CANDIDATE_ID = "be5531ab-f261-4f70-b3c7-b9478e44cbc3"
-RATE_LIMIT_DELAY = 1.0
 
+class MegaverseAPI:
+    """A class to interact with the Crossmint Megaverse API."""
 
-def make_request(func, *args, **kwargs):
-    """
-    Wrapper to handle rate limiting and retry logic for any API call.
-    """
-    max_attempts = 5
-    attempt = 0
-    while attempt < max_attempts:
-        response = func(*args, **kwargs)
+    BASE_URL = "https://challenge.crossmint.io/api"
+
+    def __init__(self, candidate_id):
+        self.candidate_id = candidate_id
+        self.created_objects = set()  # Cache to store created object identifiers
+
+    def make_request(self, endpoint, method="post", **kwargs):
+        """Generic method for making API requests with rate limit handling."""
+        url = f"{self.BASE_URL}/{endpoint}"
+        payload = {"candidateId": self.candidate_id, **kwargs}
+
+        # Create a unique identifier for the object to check for duplicates
+        obj_identifier = (endpoint, tuple(kwargs.items()))
+        if obj_identifier in self.created_objects:
+            print(f"Skipping duplicate request for {obj_identifier}")
+            return None
+
+        for attempt in range(5):
+            response = requests.request(method, url, json=payload, timeout=5)
+            if response.status_code == 200:
+                self.created_objects.add(obj_identifier)  # Mark as created
+                return response.json()
+            elif response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 2**attempt))
+                time.sleep(retry_after)
+            else:
+                print(f"Request failed: {response.text}")
+                break
+        return None
+
+    def create_object(self, obj_type, row, column, **kwargs):
+        """Creates astral objects (POLYanet, SOLoon, COMETH) in the megaverse."""
+        return self.make_request(obj_type.lower(), row=row, column=column, **kwargs)
+
+    def clear_map(self, grid_size):
+        """Clears the entire megaverse grid."""
+        for row, column in itertools.product(range(grid_size), repeat=2):
+            self.make_request("polyanets", method="delete", row=row, column=column)
+
+    def fetch_goal_state(self):
+        """Fetches the goal state for the megaverse."""
+        response = requests.get(
+            f"{self.BASE_URL}/map/{self.candidate_id}/goal", timeout=5
+        )
         if response.status_code == 200:
-            return response
-        elif response.status_code == 429:
-            retry_after = int(response.headers.get("Retry-After", 1))
-            time.sleep(retry_after)
-            attempt += 1
-        else:
-            print(f"Request failed: {response.text}")
-            break
-    return None
-
-
-# API Call Functions
-def create_polyanet(row, column):
-    url = f"{BASE_URL}/polyanets"
-    payload = {"candidateId": CANDIDATE_ID, "row": row, "column": column}
-    return requests.post(url, json=payload, timeout=5)
-
-
-def delete_polyanet(row, column):
-    url = f"{BASE_URL}/polyanets"
-    payload = {"candidateId": CANDIDATE_ID, "row": row, "column": column}
-    return requests.delete(url, json=payload, timeout=5)
-
-
-def create_soloon(row, column, color):
-    url = f"{BASE_URL}/soloons"
-    payload = {
-        "candidateId": CANDIDATE_ID,
-        "row": row,
-        "column": column,
-        "color": color,
-    }
-    return requests.post(url, json=payload, timeout=5)
-
-
-def create_cometh(row, column, direction):
-    url = f"{BASE_URL}/comeths"
-    payload = {
-        "candidateId": CANDIDATE_ID,
-        "row": row,
-        "column": column,
-        "direction": direction,
-    }
-    return requests.post(url, json=payload, timeout=5)
-
-
-def clear_map(grid_size):
-    for row, column in itertools.product(range(grid_size), repeat=2):
-        response = delete_polyanet(row, column)
-        if response.status_code not in [
-            200,
-            404,
-            400,
-        ]:  # Including 400 for out-of-bounds
-            print(
-                f"Failed to clear element at ({row}, {column}) - Status Code: {response.status_code}, Response: {response.text}"
-            )
-        time.sleep(RATE_LIMIT_DELAY)
-
-
-def fetch_goal_state():
-    url = f"{BASE_URL}/map/{CANDIDATE_ID}/goal"
-    response = requests.get(url, timeout=5)
-    if response.status_code == 200:
-        goal_data = response.json()
-        return goal_data["goal"]  # Assuming 'goal' is the key in the response
-    else:
+            return response.json().get("goal")
         print(
             f"Failed to fetch goal state - Status Code: {response.status_code}, Response: {response.text}"
         )
@@ -91,34 +59,32 @@ def fetch_goal_state():
 
 
 def main():
-    goal_state = fetch_goal_state()
+    candidate_id = "be5531ab-f261-4f70-b3c7-b9478e44cbc3"
+    api = MegaverseAPI(candidate_id)
+    goal_state = api.fetch_goal_state()
     if goal_state is None:
-        print("Failed to fetch the goal state.")
         return
 
     grid_size = max(len(goal_state), len(goal_state[0]))
-    created_objects = set()  # Cache to store created object positions and types
-
-    clear_map(grid_size)
+    api.clear_map(grid_size)
 
     for row_idx, row in enumerate(goal_state):
         for col_idx, cell in enumerate(row):
             obj_type, *details = cell.split("_")
-            identifier = (row_idx, col_idx, obj_type)
-
-            if identifier in created_objects:
-                continue  # Skip if already created
-
-            if obj_type == "POLYANET":
-                make_request(create_polyanet, row_idx, col_idx)
-            elif obj_type == "SOLOON":
-                color = details[0].lower()
-                make_request(create_soloon, row_idx, col_idx, color)
-            elif obj_type == "COMETH":
-                direction = details[0].lower()
-                make_request(create_cometh, row_idx, col_idx, direction)
-
-            created_objects.add(identifier)  # Mark as created
+            if obj_type in ["POLYANET", "SOLOON", "COMETH"]:
+                if obj_type == "SOLOON":
+                    api.create_object(
+                        obj_type, row=row_idx, column=col_idx, color=details[0].lower()
+                    )
+                elif obj_type == "COMETH":
+                    api.create_object(
+                        obj_type,
+                        row=row_idx,
+                        column=col_idx,
+                        direction=details[0].lower(),
+                    )
+                else:
+                    api.create_object(obj_type, row=row_idx, column=col_idx)
 
 
 if __name__ == "__main__":
