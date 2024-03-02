@@ -1,6 +1,10 @@
 import itertools
 import time
 import requests
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class MegaverseAPI:
@@ -54,7 +58,7 @@ class MegaverseAPI:
 
 
 def main():
-    candidate_id = "be5531ab-f261-4f70-b3c7-b9478e44cbc3"
+    candidate_id = os.environ.get("CANDIDATE_ID")
     api = MegaverseAPI(candidate_id)
 
     goal_state = api.fetch_goal_state()
